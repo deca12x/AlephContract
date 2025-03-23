@@ -1,46 +1,82 @@
-import hre from "hardhat";
-import { parseUnits } from "viem";
+import { HardhatRuntimeEnvironment } from "hardhat/types";
+import { Hex } from "viem";
 import fs from "fs";
 import path from "path";
 
+// Define ZKSync chain explicitly
+const zkSyncChain = {
+  id: 324,
+  name: "zkSync Era Mainnet",
+  network: "zksync",
+  nativeCurrency: {
+    decimals: 18,
+    name: "Ether",
+    symbol: "ETH",
+  },
+  rpcUrls: {
+    default: {
+      http: ["https://mainnet.era.zksync.io"],
+    },
+    public: {
+      http: ["https://mainnet.era.zksync.io"],
+    },
+  },
+} as const; // Add const assertion
+
+// main function
 async function main() {
   console.log("Deploying MessageStorage contract...");
 
-  // Get network information
-  console.log(`Deploying to network: ${hre.network.name}`);
+  const hre = await import("hardhat");
+  const network = hre.network.name;
+  console.log(`Deploying to network: ${network}`);
 
-  // Get deployer wallet
-  const [deployer] = await hre.viem.getWalletClients();
-  const address = deployer.account.address;
-  console.log(`Deploying from account: ${address}`);
+  // Get the network config
+  let publicClient;
+  let walletClient;
 
-  // Deploy the contract
-  const messageStorage = await hre.viem.deployContract("MessageStorage");
-  console.log(`MessageStorage deployed to: ${messageStorage.address}`);
-
-  // Save deployment info to file for later reference
-  const deploymentInfo = {
-    network: hre.network.name,
-    address: messageStorage.address,
-    deployer: address,
-    timestamp: new Date().toISOString(),
-  };
-
-  const deploymentsDir = path.join(__dirname, "../deployments");
-  if (!fs.existsSync(deploymentsDir)) {
-    fs.mkdirSync(deploymentsDir, { recursive: true });
+  if (network === "zksync") {
+    // Use explicit chain config for ZKSync
+    publicClient = await hre.viem.getPublicClient({ chain: zkSyncChain });
+    walletClient = await hre.viem.getWalletClient({ chain: zkSyncChain });
+  } else {
+    // Default for other networks
+    publicClient = await hre.viem.getPublicClient();
+    walletClient = await hre.viem.getWalletClient();
   }
 
-  fs.writeFileSync(
-    path.join(deploymentsDir, `${hre.network.name}.json`),
-    JSON.stringify(deploymentInfo, null, 2)
-  );
+  const [account] = await walletClient.getAddresses();
+  console.log(`Deploying from account: ${account}`);
+
+  // Deploy MessageStorage
+  const messageStorage = await hre.viem.deployContract("MessageStorage");
+
+  console.log(`MessageStorage deployed to: ${messageStorage.address}`);
+
+  // Save deployment info to file
+  const deploymentDir = path.join(__dirname, "..", "deployments");
+  // Create directory if it doesn't exist
+  if (!fs.existsSync(deploymentDir)) {
+    fs.mkdirSync(deploymentDir);
+  }
+
+  // Save deployment info to network-specific file
+  const deploymentPath = path.join(deploymentDir, `${network}.json`);
+  const deploymentInfo = {
+    network,
+    address: messageStorage.address,
+    deploymentTime: new Date().toISOString(),
+    deployer: account,
+  };
+
+  fs.writeFileSync(deploymentPath, JSON.stringify(deploymentInfo, null, 2));
 
   console.log("Deployment complete!");
   console.log("Contract address saved to deployments folder");
 }
 
-// We recommend this pattern to handle errors
+// We recommend this pattern to be able to use async/await everywhere
+// and properly handle errors.
 main().catch((error) => {
   console.error(error);
   process.exitCode = 1;

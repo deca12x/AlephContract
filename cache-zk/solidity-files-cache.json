@@ -1,0 +1,57 @@
+{
+  "_format": "hh-sol-cache-2",
+  "files": {
+    "/Users/deca/code/deca12x/web3/hackathons/2025-AlephMarch/AlephContract/contracts/MessageStorage.sol": {
+      "lastModificationDate": 1742708764763,
+      "contentHash": "31aba2357b526227eba1fcea76c27e2c",
+      "sourceName": "contracts/MessageStorage.sol",
+      "solcConfig": {
+        "version": "0.8.20",
+        "settings": {
+          "optimizer": {
+            "enabled": true,
+            "mode": "3"
+          },
+          "evmVersion": "paris",
+          "outputSelection": {
+            "*": {
+              "*": [
+                "abi",
+                "evm.methodIdentifiers",
+                "metadata"
+              ],
+              "": [
+                "ast"
+              ]
+            }
+          },
+          "libraries": {}
+        },
+        "zksolc": {
+          "version": "1.3.14",
+          "compilerSource": "binary",
+          "settings": {
+            "optimizer": {
+              "enabled": true,
+              "mode": "3"
+            },
+            "compilerPath": "/Users/deca/Library/Caches/hardhat-nodejs/compilers-v2/zksolc/zksolc-v1.3.14",
+            "missingLibrariesPath": "./.zksolc-libraries-cache/missingLibraryDependencies.json",
+            "areLibrariesMissing": false,
+            "experimental": {},
+            "libraries": {},
+            "enableEraVMExtensions": false,
+            "forceEVMLA": false
+          }
+        }
+      },
+      "imports": [],
+      "versionPragmas": [
+        "^0.8.20"
+      ],
+      "artifacts": [
+        "MessageStorage"
+      ]
+    }
+  }
+}

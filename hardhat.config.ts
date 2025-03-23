@@ -32,6 +32,7 @@ const config: HardhatUserConfig = {
       url: process.env.ZKSYNC_RPC_URL || "https://mainnet.era.zksync.io",
       accounts: [PRIVATE_KEY],
       zksync: true,
+      ethNetwork: "mainnet",
     },
     // Mantle mainnet
     mantle: {
