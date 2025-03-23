@@ -58,7 +58,7 @@ contract MessageStorage {
         // Get the index where we'll store this message
         uint256 index = currentIndex;
 
-        // Store the first 32 bytes
+        // Store the first 32 bytes in part1
         bytes32 firstPart;
 
         // Copy the first 32 bytes of the message
@@ -66,15 +66,18 @@ contract MessageStorage {
             firstPart := calldataload(add(message.offset, 0))
         }
 
-        // Store the remaining bytes and timestamp
+        // Store the remaining 28 bytes and timestamp in part2
         bytes32 secondPart;
-        uint256 timestampShifted = uint256(timestamp) << 224; // Shift timestamp to high bytes
+
+        // Shift timestamp to high bytes (first 4 bytes of the slot)
+        uint256 timestampShifted = uint256(timestamp) << 224;
 
         assembly {
-            // Load the remaining message bytes
+            // Load the remaining bytes starting from offset 32
             let remaining := calldataload(add(message.offset, 32))
 
             // Mask the remaining bytes to ensure only 28 bytes are used
+            // This ensures we have space for the 4-byte timestamp
             let masked := and(
                 remaining,
                 0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff
