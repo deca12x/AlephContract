@@ -10,7 +10,7 @@ A highly optimized Solidity smart contract for storing messages with timestamps,
   - 60 characters per message (60 bytes)
   - 4 bytes for timestamp (uint32)
   - Total per message: 64 bytes (exactly 2 storage slots)
-- **Circular Buffer**: Automatically overwrites the oldest messages when reaching the 10-message limit
+- **Circular Buffer**: Automatically overwrites the oldest messages when reaching the 16-message limit
 - **Multi-Chain Deployment**: Configured for Ethereum testnets, ZKSync and Mantle mainnets
 
 ## Technical Architecture

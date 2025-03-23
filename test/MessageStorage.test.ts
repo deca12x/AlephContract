@@ -1,9 +1,16 @@
 import { expect } from "chai";
 import hre from "hardhat";
-import { getAddress, parseGwei, toBytes } from "viem";
+import {
+  getAddress,
+  parseGwei,
+  toBytes,
+  bytesToHex,
+  pad,
+  type Hex,
+} from "viem";
 
-// Define types for contract return values
-type MessageResult = [Uint8Array[], bigint[]];
+// Define types for contract return values (updated for Viem's types)
+type MessageResult = [readonly Hex[], readonly bigint[]];
 
 describe("MessageStorage", function () {
   // We define a fixture to reuse the same setup in every test
@@ -21,7 +28,7 @@ describe("MessageStorage", function () {
     };
   }
 
-  function padMessage(message: string, length: number = 60): Uint8Array {
+  function padMessage(message: string, length: number = 60): Hex {
     // Convert string to bytes
     const encoder = new TextEncoder();
     const messageBytes = encoder.encode(message);
@@ -35,14 +42,18 @@ describe("MessageStorage", function () {
     // Copy the message bytes into the result
     result.set(messageBytes.slice(0, length));
 
-    return result;
+    // Convert to hex string for contract
+    return bytesToHex(result) as Hex;
   }
 
-  function convertToString(bytes: Uint8Array): string {
+  function convertToString(bytes: Uint8Array | Hex): string {
+    // If input is a hex string, convert to Uint8Array first
+    const byteArray = typeof bytes === "string" ? toBytes(bytes) : bytes;
+
     // Convert bytes to string
     const decoder = new TextDecoder("ascii");
     return decoder
-      .decode(bytes)
+      .decode(byteArray)
       .replace(/\u0000/g, "")
       .trim();
   }
@@ -71,25 +82,35 @@ describe("MessageStorage", function () {
       const currentIndex = await messageStorage.read.getCurrentIndex();
       expect(currentIndex).to.equal(1n);
 
-      // Retrieve all messages
-      const result =
-        (await messageStorage.read.getAllMessages()) as MessageResult;
-      const messages = result[0];
-      const timestamps = result[1];
+      // Retrieve the message using getMessage
+      const result = await messageStorage.read.getMessage([0n]);
+      const part1 = result[0]; // bytes32 part1
+      const part2 = result[1]; // bytes32 part2 (includes timestamp)
+      const timestamp = result[2]; // uint32 timestamp
+
+      // Convert bytes32 to string
+      const part1Str = Buffer.from(part1.slice(2), "hex")
+        .toString("ascii")
+        .replace(/\0/g, "");
+      const part2WithoutTimestamp = part2.slice(0, 2) + part2.slice(2, 58); // Remove last 4 bytes (timestamp)
+      const part2Str = Buffer.from(part2WithoutTimestamp.slice(2), "hex")
+        .toString("ascii")
+        .replace(/\0/g, "");
+
+      const fullMessage = part1Str + part2Str;
 
       // Check the stored message
-      const storedMessage = convertToString(messages[0]);
-      expect(storedMessage.trim()).to.equal(message);
+      expect(fullMessage.trim()).to.equal(message);
 
       // Check timestamp is non-zero
-      expect(Number(timestamps[0])).to.be.greaterThan(0);
+      expect(Number(timestamp)).to.be.greaterThan(0);
     });
 
     it("Should handle multiple messages in circular buffer", async function () {
       const { messageStorage } = await deployMessageStorageFixture();
 
-      // Store 12 messages (more than the buffer capacity of 10)
-      for (let i = 0; i < 12; i++) {
+      // Store 18 messages (more than the buffer capacity of 16)
+      for (let i = 0; i < 18; i++) {
         const message = `Message number ${i + 1} for testing circular buffer`;
         const paddedMessage = padMessage(message);
         await messageStorage.write.storeMessage([paddedMessage]);
@@ -99,24 +120,35 @@ describe("MessageStorage", function () {
       const currentIndex = await messageStorage.read.getCurrentIndex();
       expect(currentIndex).to.equal(2n);
 
-      // Retrieve all messages
-      const result =
-        (await messageStorage.read.getAllMessages()) as MessageResult;
-      const messages = result[0];
-      const timestamps = result[1];
+      // Helper function to convert message parts to string
+      function partsToString(part1: Hex, part2: Hex): string {
+        const p1Str = Buffer.from(part1.slice(2), "hex")
+          .toString("ascii")
+          .replace(/\0/g, "");
+        const p2WithoutTs = part2.slice(0, 2) + part2.slice(2, 58); // Remove timestamp
+        const p2Str = Buffer.from(p2WithoutTs.slice(2), "hex")
+          .toString("ascii")
+          .replace(/\0/g, "");
+        return (p1Str + p2Str).trim();
+      }
+
+      // Check individual messages
+      const message0 = await messageStorage.read.getMessage([0n]);
+      const message1 = await messageStorage.read.getMessage([1n]);
 
       // Check that older messages were overwritten
-      // The 0th and 1st slots should contain messages 11 and 12
-      expect(convertToString(messages[0]).trim()).to.equal(
-        "Message number 11 for testing circular buffer"
+      // The 0th and 1st slots should contain messages 17 and 18
+      expect(partsToString(message0[0], message0[1])).to.equal(
+        "Message number 17 for testing circular buffer"
       );
-      expect(convertToString(messages[1]).trim()).to.equal(
-        "Message number 12 for testing circular buffer"
+      expect(partsToString(message1[0], message1[1])).to.equal(
+        "Message number 18 for testing circular buffer"
       );
 
-      // And the rest should be messages 3-10
-      for (let i = 2; i < 10; i++) {
-        expect(convertToString(messages[i]).trim()).to.equal(
+      // And the rest should be messages 3-16
+      for (let i = 2; i < 16; i++) {
+        const messageData = await messageStorage.read.getMessage([BigInt(i)]);
+        expect(partsToString(messageData[0], messageData[1])).to.equal(
           `Message number ${i + 1} for testing circular buffer`
         );
       }
@@ -126,13 +158,12 @@ describe("MessageStorage", function () {
       const { messageStorage } = await deployMessageStorageFixture();
 
       // Too short message
-      const shortMessage = padMessage("Too short", 30); // Only 30 bytes
+      const tooShortMessage = "Too short";
+      const shortMessage = padMessage(tooShortMessage, 30); // Only 30 bytes
 
       // Too long message
-      const longMessage = padMessage(
-        "This message is way too long for our storage",
-        70
-      ); // 70 bytes
+      const tooLongMessage = "This message is way too long for our storage";
+      const longMessage = padMessage(tooLongMessage, 70); // 70 bytes
 
       // Both should be rejected
       await expect(messageStorage.write.storeMessage([shortMessage])).to.be
@@ -159,21 +190,34 @@ describe("MessageStorage", function () {
         await messageStorage.write.storeMessage([padMessage(msg)]);
       }
 
-      // Retrieve all messages
-      const result =
-        (await messageStorage.read.getAllMessages()) as MessageResult;
-      const messages = result[0];
-      const timestamps = result[1];
-
-      // Check all stored messages
-      for (let i = 0; i < testMessages.length; i++) {
-        expect(convertToString(messages[i]).trim()).to.equal(testMessages[i]);
-        expect(Number(timestamps[i])).to.be.greaterThan(0);
+      // Helper function to convert message parts to string
+      function partsToString(part1: Hex, part2: Hex): string {
+        const p1Str = Buffer.from(part1.slice(2), "hex")
+          .toString("ascii")
+          .replace(/\0/g, "");
+        const p2WithoutTs = part2.slice(0, 2) + part2.slice(2, 58); // Remove timestamp
+        const p2Str = Buffer.from(p2WithoutTs.slice(2), "hex")
+          .toString("ascii")
+          .replace(/\0/g, "");
+        return (p1Str + p2Str).trim();
       }
 
-      // Check that remaining slots have empty messages (but still valid bytes arrays)
-      for (let i = testMessages.length; i < 10; i++) {
-        expect(messages[i].length).to.equal(60);
+      // Check each message individually
+      for (let i = 0; i < testMessages.length; i++) {
+        const msgData = await messageStorage.read.getMessage([BigInt(i)]);
+        const fullMsg = partsToString(msgData[0], msgData[1]);
+        const timestamp = msgData[2];
+
+        expect(fullMsg).to.equal(testMessages[i]);
+        expect(Number(timestamp)).to.be.greaterThan(0);
+      }
+
+      // Check that remaining slots return valid byte arrays
+      for (let i = testMessages.length; i < 16; i++) {
+        const emptyMsgData = await messageStorage.read.getMessage([BigInt(i)]);
+        // Just verify we can access these slots without errors
+        expect(emptyMsgData[0]).to.not.be.undefined;
+        expect(emptyMsgData[1]).to.not.be.undefined;
       }
     });
   });

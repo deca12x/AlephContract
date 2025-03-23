@@ -10,18 +10,27 @@ pragma solidity ^0.8.20;
  * - Each message is 60 characters (60 bytes)
  * - Each timestamp is 4 bytes (uint32)
  * - Total per message: 64 bytes (exactly 2 storage slots)
- * - Max 10 messages (20 storage slots total)
+ * - Max 16 messages (32 storage slots total)
  * - Uses a circular buffer to overwrite oldest messages
  */
 contract MessageStorage {
     // Constants for storage optimization
-    uint256 private constant MAX_MESSAGES = 10;
+    uint256 private constant MAX_MESSAGES = 16;
     uint256 private constant MESSAGE_SIZE_BYTES = 60; // 60 characters
     uint256 private constant TIMESTAMP_SIZE_BYTES = 4; // uint32 timestamp
     uint256 private constant BYTES_PER_SLOT = 32; // Ethereum storage slot size
 
     // Storage variables
     uint256 private currentIndex; // Track the current position in the circular buffer
+
+    // Data structures for storage
+    struct MessageData {
+        bytes32 part1;
+        bytes32 part2; // 28 bytes of message + 4 bytes timestamp
+    }
+
+    // Message storage - explicitly map indices to data
+    mapping(uint256 => MessageData) private messages;
 
     // Event emitted when a new message is stored
     event MessageStored(uint256 indexed index, uint256 timestamp);
@@ -36,7 +45,7 @@ contract MessageStorage {
      * @param message The ASCII message to store (must be exactly 60 characters)
      * @return The index where the message was stored
      */
-    function storeMessage(bytes memory message) external returns (uint256) {
+    function storeMessage(bytes calldata message) external returns (uint256) {
         // Require exact message length
         require(
             message.length == MESSAGE_SIZE_BYTES,
@@ -46,38 +55,45 @@ contract MessageStorage {
         // Get current timestamp as uint32 (4 bytes)
         uint32 timestamp = uint32(block.timestamp);
 
-        // Calculate storage position
-        // Each message takes 2 slots: slot N for first 32 bytes, slot N+1 for remaining 28 bytes + timestamp
-        uint256 baseSlot = currentIndex * 2;
+        // Get the index where we'll store this message
+        uint256 index = currentIndex;
 
-        // Use assembly for gas-efficient storage
+        // Store the first 32 bytes
+        bytes32 firstPart;
+
+        // Copy the first 32 bytes of the message
         assembly {
-            // Store first 32 bytes of the message
-            // sstore(slot, value)
-            sstore(baseSlot, mload(add(message, 32)))
-
-            // Load the next 28 bytes of the message
-            let secondSlotValue := mload(add(message, 64))
-
-            // Shift the timestamp to the most significant 4 bytes position
-            // and combine with the remaining 28 bytes of the message
-            let timestampValue := shl(224, timestamp)
-            let combinedValue := or(secondSlotValue, timestampValue)
-
-            // Store the combined value
-            sstore(add(baseSlot, 1), combinedValue)
+            firstPart := calldataload(add(message.offset, 0))
         }
 
-        // Emit event with index and timestamp
-        emit MessageStored(currentIndex, timestamp);
+        // Store the remaining bytes and timestamp
+        bytes32 secondPart;
+        uint256 timestampShifted = uint256(timestamp) << 224; // Shift timestamp to high bytes
 
-        // Get the current index before updating it
-        uint256 returnIndex = currentIndex;
+        assembly {
+            // Load the remaining message bytes
+            let remaining := calldataload(add(message.offset, 32))
+
+            // Mask the remaining bytes to ensure only 28 bytes are used
+            let masked := and(
+                remaining,
+                0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+            )
+
+            // Combine with the timestamp
+            secondPart := or(masked, timestampShifted)
+        }
+
+        // Store both parts in the mapping
+        messages[index] = MessageData({part1: firstPart, part2: secondPart});
+
+        // Emit event with index and timestamp
+        emit MessageStored(index, timestamp);
 
         // Update index for next message (circular buffer)
         currentIndex = (currentIndex + 1) % MAX_MESSAGES;
 
-        return returnIndex;
+        return index;
     }
 
     /**
@@ -88,60 +104,61 @@ contract MessageStorage {
     function getAllMessages()
         external
         view
-        returns (bytes[] memory messages, uint32[] memory timestamps)
+        returns (bytes[] memory, uint32[] memory)
     {
-        messages = new bytes[](MAX_MESSAGES);
-        timestamps = new uint32[](MAX_MESSAGES);
+        bytes[] memory allMessages = new bytes[](MAX_MESSAGES);
+        uint32[] memory allTimestamps = new uint32[](MAX_MESSAGES);
 
         // Iterate through all message slots and extract data
         for (uint256 i = 0; i < MAX_MESSAGES; i++) {
-            // Calculate base slot for this message
-            uint256 baseSlot = i * 2;
+            MessageData storage data = messages[i];
 
-            // Temporary arrays to store message parts
-            bytes memory messagePart1 = new bytes(32);
-            bytes memory messagePart2 = new bytes(28);
-            uint32 timestamp;
+            // Create a new bytes array for this message
+            bytes memory messageBytes = new bytes(MESSAGE_SIZE_BYTES);
 
-            // Use assembly to efficiently read from storage
+            // Extract the timestamp from part2 (top 4 bytes)
+            uint32 timestamp = uint32(uint256(data.part2) >> 224);
+
+            // Copy the data to the messageBytes array using assembly
             assembly {
-                // Load first 32 bytes from storage
-                let firstSlot := sload(baseSlot)
+                // Copy first part
+                mstore(add(messageBytes, 32), mload(data.slot))
 
-                // Store first 32 bytes in messagePart1
-                mstore(add(messagePart1, 32), firstSlot)
-
-                // Load second slot containing 28 bytes of message + 4 bytes timestamp
-                let secondSlot := sload(add(baseSlot, 1))
-
-                // Extract the timestamp (most significant 4 bytes)
-                timestamp := shr(224, secondSlot)
-
-                // Clear the timestamp bits to get only the message part
-                let messagePart := and(
+                // Copy second part (mask out the timestamp)
+                let secondSlot := mload(add(data.slot, 32))
+                let maskedSecond := and(
                     secondSlot,
                     0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff
                 )
-
-                // Store remaining 28 bytes in messagePart2
-                mstore(add(messagePart2, 32), messagePart)
+                mstore(add(messageBytes, 64), maskedSecond)
             }
 
-            // Combine message parts
-            bytes memory fullMessage = new bytes(MESSAGE_SIZE_BYTES);
-            for (uint256 j = 0; j < 32; j++) {
-                fullMessage[j] = messagePart1[j];
-            }
-            for (uint256 j = 0; j < 28; j++) {
-                fullMessage[j + 32] = messagePart2[j];
-            }
-
-            // Store the extracted data in the return arrays
-            messages[i] = fullMessage;
-            timestamps[i] = timestamp;
+            // Store the results
+            allMessages[i] = messageBytes;
+            allTimestamps[i] = timestamp;
         }
 
-        return (messages, timestamps);
+        return (allMessages, allTimestamps);
+    }
+
+    /**
+     * @dev Get a specific stored message by index
+     * @param index The index of the message to retrieve
+     * @return part1 The first part of the message
+     * @return part2 The second part of the message (includes timestamp)
+     * @return timestamp The message timestamp
+     */
+    function getMessage(
+        uint256 index
+    ) external view returns (bytes32, bytes32, uint32) {
+        require(index < MAX_MESSAGES, "Index out of bounds");
+
+        MessageData storage data = messages[index];
+
+        // Extract the timestamp from part2 (top 4 bytes)
+        uint32 timestamp = uint32(uint256(data.part2) >> 224);
+
+        return (data.part1, data.part2, timestamp);
     }
 
     /**

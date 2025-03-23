@@ -44,6 +44,7 @@ const config: HardhatUserConfig = {
         auto: true,
         interval: 0,
       },
+      blockGasLimit: 30000000,
     },
   },
   zksolc: {
